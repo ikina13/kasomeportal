@@ -2,6 +2,9 @@
 <?php
 use App\Http\Controllers\CourseController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\SubscriptionController;
+use App\Http\Controllers\BookController;
+use App\Http\Controllers\BookPaymentController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Middleware\TokenMiddleware;
@@ -33,6 +36,13 @@ Route::get('users/courses',[CourseController::class,'getAllCourses']);
 Route::get('users/portal/courses/{id}',[CourseController::class,'getPortalCoursesById']);
 Route::get('users/courses/video/{id}',[CourseController::class,'getVideoById']);
 Route::get('users/video/{id}',[CourseController::class,'getVideoByToken']);
+
+// Book Routes (Public)
+Route::get('books',[BookController::class,'index']);
+Route::get('books/{id}',[BookController::class,'show']);
+Route::get('books/{id}/access',[BookController::class,'checkAccess']);
+Route::post('books/payment/callback',[BookPaymentController::class,'paymentCallback']);
+Route::get('books/payment/status/{token}',[BookPaymentController::class,'paymentStatus']);
 //Route::post('users/payment/token',[CourseController::class,'createPaymentToken']);
 Route::group(['middleware'=>['auth:sanctum',TokenMiddleware::class]],function () {
      Route::post('users/logout',[UserController::class,'logout']);
@@ -59,4 +69,19 @@ Route::group(['middleware'=>['auth:sanctum',TokenMiddleware::class]],function ()
      Route::get('users/clip/comments/{id}',[UserController::class,'getClipComments']);
      Route::post('users/clip/comments/reply/{id}',[UserController::class,'createClipCommentsReply']);
      Route::get('users/subscription',[UserController::class,'userSubscription']);
+     
+     // Subscription Management Routes
+     Route::post('users/subscription/create',[SubscriptionController::class,'createSubscription']);
+     Route::get('users/subscriptions',[SubscriptionController::class,'getUserSubscriptions']);
+     Route::post('users/subscription/{id}/courses/add',[SubscriptionController::class,'addCoursesToSubscription']);
+     Route::post('users/subscription/{id}/courses/remove',[SubscriptionController::class,'removeCoursesFromSubscription']);
+     Route::get('users/courses/accessible',[SubscriptionController::class,'getAccessibleCourses']);
+     Route::get('users/courses/{courseId}/access',[SubscriptionController::class,'checkCourseAccess']);
+     Route::post('users/subscription/{id}/cancel',[SubscriptionController::class,'cancelSubscription']);
+     
+     // Book Routes (Authenticated)
+     Route::get('books/my-purchases',[BookController::class,'myPurchases']);
+     Route::get('books/{id}/download',[BookController::class,'download']);
+     Route::post('books/{id}/purchase',[BookPaymentController::class,'createPaymentToken']);
+     Route::post('books/{id}/donate',[BookPaymentController::class,'createPaymentToken']);
 });

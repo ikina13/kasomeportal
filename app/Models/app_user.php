@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Laravel\Sanctum\HasApiTokens;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 class app_user extends Model {
 
     use HasApiTokens;
@@ -180,8 +181,17 @@ class app_user extends Model {
     
     // Check if the current time is between the start and end dates
     $now = Carbon::now();
-    $startDate = Carbon::parse($latestSubscription->start_date);
-    $endDate = Carbon::parse($latestSubscription->end_date);
+    // Dates are already Carbon instances due to datetime casting
+    $startDate = $latestSubscription->start_date;
+    $endDate = $latestSubscription->end_date;
+
+    // Ensure we have Carbon instances
+    if (!$startDate instanceof Carbon) {
+        $startDate = Carbon::make($startDate);
+    }
+    if (!$endDate instanceof Carbon) {
+        $endDate = Carbon::make($endDate);
+    }
 
     if ($now->between($startDate, $endDate)) {
         return 'Active';

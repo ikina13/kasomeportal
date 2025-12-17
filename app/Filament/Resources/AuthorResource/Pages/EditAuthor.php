@@ -16,4 +16,13 @@ class EditAuthor extends EditRecord
             Actions\DeleteAction::make(),
         ];
     }
+
+    protected function afterSave(): void
+    {
+        // Set updated_by field
+        $this->record->update([
+            'updated_at' => date('Y-m-d H:i:s'),
+            'updated_by' => auth()->id(),
+        ]);
+    }
 }

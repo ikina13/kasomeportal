@@ -44,10 +44,25 @@ class PracticleVideoResource extends Resource
                         ->maxLength(255),
                     Forms\Components\TextInput::make('price')
                         ->required()
-                        ->maxLength(255),
-                    Forms\Components\TextInput::make('author')
+                        ->numeric(),
+                    Forms\Components\Select::make('author_id')
+                        ->label('Author')
+                        ->options(Author::all()->pluck('name', 'id'))
+                        ->searchable()
                         ->required()
-                        ->maxLength(255),
+                        ->createOptionForm([
+                            Forms\Components\TextInput::make('name')
+                                ->label('Author Name')
+                                ->required()
+                                ->maxLength(255),
+                            Forms\Components\FileUpload::make('thumbnail')
+                                ->label('Photo')
+                                ->image()
+                                ->directory('authors'),
+                            Forms\Components\Textarea::make('biography')
+                                ->label('Profile/Description')
+                                ->rows(4),
+                        ]),
                     Forms\Components\Select::make('class_id')
     ->label('Class Name')
     ->options(ClassModel::all()->pluck('name', 'id'))
@@ -99,9 +114,9 @@ class PracticleVideoResource extends Resource
             ->columns([
                 ImageColumn::make('thumbnail')->size(50),
                 Tables\Columns\TextColumn::make('name')->label("Course Name")->searchable()->sortable(),
-                Tables\Columns\TextColumn::make('author')->label("Course Author")->searchable()->sortable(),
-                Tables\Columns\TextColumn::make('price')->label("Course Price")->searchable()->sortable(),
-               Tables\Columns\TextColumn::make('created_at')->label("Created Date")->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('author.name')->label("Course Author")->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('price')->label("Course Price")->money('TZS')->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('created_at')->label("Created Date")->dateTime()->searchable()->sortable(),
             ])
             ->defaultSort('id', 'desc')
             ->filters([

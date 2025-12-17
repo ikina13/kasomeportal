@@ -79,6 +79,14 @@ class practical_video_model extends Model{
    public function userAccess()
    {
         return $this->hasMany('App\Models\user_course_access_model','id', 'video_id');
-   }        
+   }
+
+    /**
+     * Get the author of this course.
+     */
+    public function author()
+    {
+        return $this->belongsTo('App\Models\author_model', 'author_id');
+    }
 
 }

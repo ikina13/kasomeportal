@@ -61,4 +61,17 @@ class ClassSubscription extends Model
     {
         return $this->belongsTo(User::class, 'user_id');
     }
+
+    /**
+     * Get the courses associated with this class subscription.
+     */
+    public function courses()
+    {
+        return $this->belongsToMany(
+            practical_video_model::class,
+            'tbl_class_subscription_courses',
+            'class_subscription_id',
+            'course_id'
+        );
+    }
 }

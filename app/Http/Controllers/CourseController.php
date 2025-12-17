@@ -48,17 +48,22 @@ class CourseController extends Controller
 
     public function getCoursesById($id)
     {
-
-        
- 
-        //$request->input('token');
         // Extract data from the JSON request body
         $userId = request()->input('user_id');
+        $user = AppUser::find($userId);
 
+        if (!$user) {
+            return response()->json([
+                'status' => 'FAILURE',
+                'message' => 'User not found',
+            ], 404);
+        }
+
+        // Verify pending payments
         $payment = Payments::where('user_id', $userId)
             ->where('video_id', $id)
             ->where('status', 'pending')
-            ->latest('created_at') // Gets the newest one first
+            ->latest('created_at')
             ->first();
 
         if($payment){
@@ -71,14 +76,71 @@ class CourseController extends Controller
                }
           }
 
-        $data = Course::with(['PracticleVideoClips', 'payment' => function ($query) use ($userId) {
+        // Get course data
+        $course = Course::with(['PracticleVideoClips', 'payment' => function ($query) use ($userId) {
         $query->where('user_id', $userId)->latest('created_at')->first();
-               }])->where('id', $id)->orderBy('id', 'asc')->get();
+        }])->where('id', $id)->first();
+
+        if (!$course) {
+            return response()->json([
+                'status' => 'FAILURE',
+                'message' => 'Course not found',
+            ], 404);
+        }
+
+        // Check access via all subscription types
+        $hasAccess = $user->hasCourseAccess($id);
+
+        // Determine access type
+        $accessInfo = [
+            'has_access' => $hasAccess,
+            'access_type' => null, // 'free', 'payment', 'class_subscription', 'all_courses', 'specific_courses'
+            'subscription_details' => null,
+        ];
+
+        if ($hasAccess) {
+            // Check if course is free
+            if ($course->price == null || $course->price == 0) {
+                $accessInfo['access_type'] = 'free';
+            }
+            // Check individual payment
+            elseif ($user->payments()->where('video_id', $id)->where('status', 'settled')->exists()) {
+                $accessInfo['access_type'] = 'payment';
+            }
+            // Check class subscription
+            elseif ($course->class_id && $user->hasActiveClassSubscription($course->class_id)) {
+                $accessInfo['access_type'] = 'class_subscription';
+                $classSub = $user->getActiveClassSubscription($course->class_id);
+                $accessInfo['subscription_details'] = [
+                    'expires_at' => $classSub->end_date,
+                ];
+            }
+            // Check general subscription
+            else {
+                $activeSubscription = $user->subscriptions()
+                    ->where('status', 'active')
+                    ->where('start_date', '<=', now())
+                    ->where('end_date', '>=', now())
+                    ->first();
+                
+                if ($activeSubscription) {
+                    $accessInfo['access_type'] = $activeSubscription->subscription_type;
+                    $accessInfo['subscription_details'] = [
+                        'expires_at' => $activeSubscription->end_date,
+                        'subscription_id' => $activeSubscription->id,
+                    ];
+                }
+            }
+        }
+
+        // Convert single course to array for consistency with existing API
+        $data = collect([$course]);
 
         return response()->json([
             'status' => 'SUCCESS',
             'message' => 'Courses videos retrieved successfully',
             'data' => $data,
+            'access' => $accessInfo,
         ], 200);
     }
 
