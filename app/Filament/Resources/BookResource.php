@@ -63,11 +63,11 @@ class BookResource extends Resource
 
                         Forms\Components\Select::make('language')
                             ->options([
-                                'english' => 'English',
-                                'swahili' => 'Swahili',
+                                'eng' => 'English',
+                                'swa' => 'Swahili',
                             ])
                             ->required()
-                            ->default('english'),
+                            ->default('eng'),
 
                         Forms\Components\TextInput::make('level')
                             ->maxLength(255)
@@ -198,10 +198,10 @@ class BookResource extends Resource
 
                 Tables\Columns\BadgeColumn::make('language')
                     ->colors([
-                        'primary' => 'english',
-                        'success' => 'swahili',
+                        'primary' => 'eng',
+                        'success' => 'swa',
                     ])
-                    ->formatStateUsing(fn ($state) => ucfirst($state)),
+                    ->formatStateUsing(fn ($state) => $state === 'eng' ? 'English' : ($state === 'swa' ? 'Swahili' : ucfirst($state))),
 
                 Tables\Columns\TextColumn::make('price')
                     ->label('Price')
@@ -243,11 +243,11 @@ class BookResource extends Resource
             ])
             ->defaultSort('id', 'desc')
             ->filters([
-                Tables\Filters\SelectFilter::make('language')
-                    ->options([
-                        'english' => 'English',
-                        'swahili' => 'Swahili',
-                    ]),
+                    Tables\Filters\SelectFilter::make('language')
+                        ->options([
+                            'eng' => 'English',
+                            'swa' => 'Swahili',
+                        ]),
 
                 Tables\Filters\TernaryFilter::make('is_active')
                     ->label('Active Status')
