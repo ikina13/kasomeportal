@@ -205,7 +205,7 @@ class BookResource extends Resource
 
                 Tables\Columns\TextColumn::make('price')
                     ->label('Price')
-                    ->money('TZS')
+                    ->formatStateUsing(fn ($state) => 'TZS ' . number_format($state, 0, '.', ','))
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('purchases_count')
@@ -215,11 +215,11 @@ class BookResource extends Resource
 
                 Tables\Columns\TextColumn::make('total_revenue')
                     ->label('Revenue')
-                    ->money('TZS')
-                    ->sortable()
-                    ->getStateUsing(function (Book $record): float {
-                        return $record->total_revenue ?? 0;
-                    }),
+                    ->formatStateUsing(function ($state, Book $record) {
+                        $revenue = $record->payments()->where('status', 'settled')->sum('amount') ?? 0;
+                        return 'TZS ' . number_format($revenue, 0, '.', ',');
+                    })
+                    ->sortable(),
 
                 BadgeColumn::make('is_donation_enabled')
                     ->label('Donation')
