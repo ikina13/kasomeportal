@@ -134,9 +134,10 @@ class BookResource extends Resource
                                     ->directory('books/covers')
                                     ->visibility('public')
                                     ->imagePreviewHeight('300')
-                                    ->maxSize(5120)
+                                    ->maxSize(5120) // 5MB in KB
                                     ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp'])
                                     ->helperText('Upload book cover image (Max 5MB)')
+                                    ->disk('public')
                                     ->columnSpan('full'),
                             ])
                             ->collapsible()

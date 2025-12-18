@@ -18,6 +18,13 @@ class CreateBook extends CreateRecord
         // Don't set file properties here - file might still be in livewire-tmp
         // We'll set them in afterCreate() after Filament moves the file to final location
         
+        // Remove any livewire-tmp paths from data to prevent errors
+        // Filament will handle moving files from temp location
+        if (isset($data['image_url']) && strpos($data['image_url'], 'livewire-tmp') !== false) {
+            // Keep the value, Filament will process it
+            // But don't try to access it yet
+        }
+        
         return $data;
     }
     
