@@ -84,19 +84,38 @@ class BookPaymentController extends Controller
             // payment_type must be 'book_purchase' or 'donation' (check constraint)
             $paymentType = $purchaseType === 'donation' ? 'donation' : 'book_purchase';
             
-            $payment = BookPayment::create([
+            Log::info('Creating BookPayment record', [
                 'user_id' => $userId,
                 'book_id' => $bookId,
                 'amount' => $amount,
-                'status' => 'pending',
                 'payment_type' => $paymentType,
-                'donation_type' => $purchaseType === 'donation' ? 'book' : null,
-                'donation_title' => $purchaseType === 'donation' ? $book->title : null,
-                'is_anonymous' => $request->input('is_anonymous', false),
-                'donor_name' => $request->input('donor_name'),
-                'donor_message' => $request->input('donor_message'),
-                'created_by' => $userId,
+                'purchase_type' => $purchaseType,
             ]);
+            
+            try {
+                $payment = BookPayment::create([
+                    'user_id' => $userId,
+                    'book_id' => $bookId,
+                    'amount' => $amount,
+                    'status' => 'pending',
+                    'payment_type' => $paymentType,
+                    'donation_type' => $purchaseType === 'donation' ? 'book' : null,
+                    'donation_title' => $purchaseType === 'donation' ? $book->title : null,
+                    'is_anonymous' => $request->input('is_anonymous', false),
+                    'donor_name' => $request->input('donor_name'),
+                    'donor_message' => $request->input('donor_message'),
+                    'created_by' => $userId,
+                ]);
+                Log::info('BookPayment created successfully', ['payment_id' => $payment->id]);
+            } catch (\Exception $dbError) {
+                Log::error('Failed to create BookPayment', [
+                    'error' => $dbError->getMessage(),
+                    'trace' => $dbError->getTraceAsString(),
+                    'user_id' => $userId,
+                    'book_id' => $bookId,
+                ]);
+                throw $dbError;
+            }
 
             // Prepare DPO payment request
             $companyToken = "55B69320-7B2D-451F-9846-4790DA901616";
@@ -177,22 +196,53 @@ class BookPaymentController extends Controller
 
             $response = curl_exec($curl);
             $err = curl_error($curl);
+            $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
             curl_close($curl);
 
             if ($err) {
-                Log::error('DPO cURL Error: ' . $err);
+                Log::error('DPO cURL Error: ' . $err, [
+                    'book_id' => $bookId,
+                    'user_id' => $userId,
+                ]);
                 return response()->json([
                     'status' => 'FAILURE',
-                    'message' => 'Payment gateway error',
+                    'message' => 'Payment gateway connection error: ' . $err,
                     'error' => $err,
                 ], 500);
             }
 
+            // Log raw response for debugging
+            Log::info('DPO API Response', [
+                'http_code' => $httpCode,
+                'response_length' => strlen($response),
+                'response_preview' => substr($response, 0, 500),
+            ]);
+
             // Parse XML response
-            $xmlResponse = simplexml_load_string($response);
-            $result = (string) $xmlResponse->Result;
-            $resultExplanation = (string) $xmlResponse->ResultExplanation;
-            $transactionToken = (string) $xmlResponse->TransToken ?? '';
+            $xmlResponse = @simplexml_load_string($response);
+            
+            if ($xmlResponse === false) {
+                Log::error('Failed to parse DPO XML response', [
+                    'response' => $response,
+                    'book_id' => $bookId,
+                    'user_id' => $userId,
+                ]);
+                return response()->json([
+                    'status' => 'FAILURE',
+                    'message' => 'Invalid response from payment gateway',
+                    'error' => 'Failed to parse XML response',
+                ], 500);
+            }
+
+            $result = (string) ($xmlResponse->Result ?? '');
+            $resultExplanation = (string) ($xmlResponse->ResultExplanation ?? '');
+            $transactionToken = (string) ($xmlResponse->TransToken ?? '');
+
+            Log::info('DPO API Result', [
+                'result' => $result,
+                'result_explanation' => $resultExplanation,
+                'has_token' => !empty($transactionToken),
+            ]);
 
             if ($result === '000' && $transactionToken) {
                 // Update payment with transaction token
@@ -214,19 +264,45 @@ class BookPaymentController extends Controller
                     ],
                 ], 200);
             } else {
+                $errorMessage = $resultExplanation ?: ('DPO API returned error code: ' . ($result ?: 'UNKNOWN'));
+                Log::error('DPO API returned error', [
+                    'result' => $result,
+                    'result_explanation' => $resultExplanation,
+                    'book_id' => $bookId,
+                    'user_id' => $userId,
+                    'xml_response' => $response,
+                ]);
                 return response()->json([
                     'status' => 'FAILURE',
-                    'message' => 'Failed to create payment token: ' . $resultExplanation,
-                    'code' => $result,
+                    'message' => 'Failed to create payment token: ' . $errorMessage,
+                    'code' => $result ?: 'UNKNOWN',
+                    'error_details' => [
+                        'result' => $result,
+                        'result_explanation' => $resultExplanation,
+                    ],
                 ], 400);
             }
 
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            Log::error('Model not found in BookPaymentController', [
+                'exception' => get_class($e),
+                'message' => $e->getMessage(),
+                'book_id' => $bookId ?? null,
+                'user_id' => $request->input('user_id'),
+            ]);
+            return response()->json([
+                'status' => 'FAILURE',
+                'message' => 'Book or user not found',
+                'code' => '404',
+            ], 404);
         } catch (\Exception $e) {
             Log::error('Error creating payment token: ' . $e->getMessage(), [
                 'exception' => get_class($e),
                 'trace' => $e->getTraceAsString(),
                 'book_id' => $bookId ?? null,
                 'user_id' => $request->input('user_id'),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
             ]);
             return response()->json([
                 'status' => 'FAILURE',
