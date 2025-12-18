@@ -31,15 +31,17 @@ class BookController extends Controller
                 $query->where('level', $request->level);
             }
 
-            // Search
-            if ($request->has('search') && $request->search) {
-                $search = $request->search;
-                $query->where(function($q) use ($search) {
-                    $q->where('title', 'ilike', "%{$search}%")
-                      ->orWhere('author', 'ilike', "%{$search}%")
-                      ->orWhere('description', 'ilike', "%{$search}%");
-                });
-            }
+             // Search
+             if ($request->has('search') && $request->search) {
+                 $search = $request->search;
+                 $query->where(function($q) use ($search) {
+                     $q->where('title', 'ilike', "%{$search}%")
+                       ->orWhereHas('authorModel', function($q) use ($search) {
+                           $q->where('name', 'ilike', "%{$search}%");
+                       })
+                       ->orWhere('description', 'ilike', "%{$search}%");
+                 });
+             }
 
             // Sort
             $sortBy = $request->input('sort', 'created_at');

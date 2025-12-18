@@ -57,11 +57,6 @@ class BookResource extends Resource
                             ])
                             ->required(),
 
-                        Forms\Components\TextInput::make('author')
-                            ->label('Author Name (Legacy)')
-                            ->maxLength(255)
-                            ->helperText('Legacy field - use Author dropdown above'),
-
                         Forms\Components\Textarea::make('description')
                             ->rows(4)
                             ->columnSpan('full'),
@@ -95,16 +90,6 @@ class BookResource extends Resource
                             ->minValue(0)
                             ->maxValue(5)
                             ->step(0.1),
-
-                        Forms\Components\TextInput::make('review_count')
-                            ->label('Review Count')
-                            ->numeric()
-                            ->default(0),
-
-                        Forms\Components\TextInput::make('stock_quantity')
-                            ->label('Stock Quantity')
-                            ->numeric()
-                            ->default(0),
 
                         Forms\Components\Toggle::make('is_active')
                             ->label('Active')
