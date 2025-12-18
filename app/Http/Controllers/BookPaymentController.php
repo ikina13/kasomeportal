@@ -81,12 +81,15 @@ class BookPaymentController extends Controller
             }
 
             // Create payment record
+            // payment_type must be 'book_purchase' or 'donation' (check constraint)
+            $paymentType = $purchaseType === 'donation' ? 'donation' : 'book_purchase';
+            
             $payment = BookPayment::create([
                 'user_id' => $userId,
                 'book_id' => $bookId,
                 'amount' => $amount,
                 'status' => 'pending',
-                'payment_type' => 'book',
+                'payment_type' => $paymentType,
                 'donation_type' => $purchaseType === 'donation' ? 'book' : null,
                 'donation_title' => $purchaseType === 'donation' ? $book->title : null,
                 'is_anonymous' => $request->input('is_anonymous', false),
