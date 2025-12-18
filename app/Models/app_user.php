@@ -242,4 +242,176 @@ class app_user extends Model {
         return $this->hasMany(ClassSubscription::class, 'user_id');
     }
 
+    /**
+     * Check if user has access to a specific course.
+     * Checks in order: individual payments, class subscriptions, general subscriptions
+     *
+     * @param int $courseId
+     * @return bool
+     */
+    public function hasCourseAccess($courseId): bool
+    {
+        // 1. Check if course is free (price is 0 or null)
+        $course = practical_video_model::find($courseId);
+        if ($course && ($course->price == null || $course->price == 0)) {
+            return true;
+        }
+
+        // 2. Check individual payments (payments_model with video_id = courseId and status = 'settled')
+        $hasPaid = $this->payments()
+            ->where('video_id', $courseId)
+            ->where('status', 'settled')
+            ->exists();
+
+        if ($hasPaid) {
+            return true;
+        }
+
+        // 3. Check class subscriptions
+        $classSubscriptions = $this->classSubscriptions()
+            ->where('status', 'active')
+            ->where('start_date', '<=', Carbon::now())
+            ->where('end_date', '>=', Carbon::now())
+            ->get();
+
+        foreach ($classSubscriptions as $classSub) {
+            // Check if this class subscription grants access to the course
+            // Either all courses in the class, or specific courses if subscription has course selection
+            $courseInClass = practical_video_model::where('id', $courseId)
+                ->where('class_id', $classSub->class_id)
+                ->exists();
+
+            if ($courseInClass) {
+                // Check if subscription has specific courses selected
+                $hasSpecificCourses = $classSub->courses()->exists();
+                
+                if (!$hasSpecificCourses) {
+                    // No specific courses selected, so all courses in the class are accessible
+                    return true;
+                } else {
+                    // Check if this specific course is in the subscription
+                    if ($classSub->courses()->where('id', $courseId)->exists()) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 4. Check general subscriptions (all_courses or specific_courses)
+        $activeSubscriptions = $this->subscriptions()
+            ->where('status', 'active')
+            ->where('start_date', '<=', Carbon::now())
+            ->where('end_date', '>=', Carbon::now())
+            ->get();
+
+        foreach ($activeSubscriptions as $subscription) {
+            if ($subscription->hasCourseAccess($courseId)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get all course IDs that the user has access to.
+     *
+     * @return array
+     */
+    public function getAccessibleCourseIds(): array
+    {
+        $accessibleIds = [];
+
+        // Get all free courses
+        $freeCourses = practical_video_model::where(function($q) {
+            $q->whereNull('price')->orWhere('price', 0);
+        })->pluck('id')->toArray();
+        $accessibleIds = array_merge($accessibleIds, $freeCourses);
+
+        // Get courses from individual payments
+        $paidCourses = $this->payments()
+            ->where('status', 'settled')
+            ->whereNotNull('video_id')
+            ->pluck('video_id')
+            ->unique()
+            ->toArray();
+        $accessibleIds = array_merge($accessibleIds, $paidCourses);
+
+        // Get courses from class subscriptions
+        $classSubscriptions = $this->classSubscriptions()
+            ->where('status', 'active')
+            ->where('start_date', '<=', Carbon::now())
+            ->where('end_date', '>=', Carbon::now())
+            ->get();
+
+        foreach ($classSubscriptions as $classSub) {
+            $hasSpecificCourses = $classSub->courses()->exists();
+            
+            if (!$hasSpecificCourses) {
+                // All courses in the class
+                $classCourses = practical_video_model::where('class_id', $classSub->class_id)
+                    ->pluck('id')
+                    ->toArray();
+                $accessibleIds = array_merge($accessibleIds, $classCourses);
+            } else {
+                // Specific courses only
+                $specificCourses = $classSub->courses()->pluck('id')->toArray();
+                $accessibleIds = array_merge($accessibleIds, $specificCourses);
+            }
+        }
+
+        // Get courses from general subscriptions
+        $activeSubscriptions = $this->subscriptions()
+            ->where('status', 'active')
+            ->where('start_date', '<=', Carbon::now())
+            ->where('end_date', '>=', Carbon::now())
+            ->get();
+
+        foreach ($activeSubscriptions as $subscription) {
+            if ($subscription->subscription_type === 'all_courses') {
+                // All courses
+                $allCourses = practical_video_model::pluck('id')->toArray();
+                $accessibleIds = array_merge($accessibleIds, $allCourses);
+            } elseif ($subscription->subscription_type === 'specific_courses') {
+                // Specific courses only
+                $specificCourses = $subscription->courses()->pluck('id')->toArray();
+                $accessibleIds = array_merge($accessibleIds, $specificCourses);
+            }
+        }
+
+        return array_unique($accessibleIds);
+    }
+
+    /**
+     * Check if user has an active class subscription for a specific class.
+     *
+     * @param int $classId
+     * @return bool
+     */
+    public function hasActiveClassSubscription($classId): bool
+    {
+        return $this->classSubscriptions()
+            ->where('class_id', $classId)
+            ->where('status', 'active')
+            ->where('start_date', '<=', Carbon::now())
+            ->where('end_date', '>=', Carbon::now())
+            ->exists();
+    }
+
+    /**
+     * Get active class subscription for a specific class.
+     *
+     * @param int $classId
+     * @return ClassSubscription|null
+     */
+    public function getActiveClassSubscription($classId)
+    {
+        return $this->classSubscriptions()
+            ->where('class_id', $classId)
+            ->where('status', 'active')
+            ->where('start_date', '<=', Carbon::now())
+            ->where('end_date', '>=', Carbon::now())
+            ->first();
+    }
+
 }
