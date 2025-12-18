@@ -53,59 +53,89 @@ class EditBook extends EditRecord
         
         $filePath = $data['file_name'];
         
+        // Skip if file is still in livewire-tmp (temporary upload location)
+        if (strpos($filePath, 'livewire-tmp') !== false) {
+            return;
+        }
+        
         // Filament FileUpload stores files relative to the disk root
         // Check different possible locations
-        $fullPath = null;
-        $finalPath = $filePath;
+        $fileSize = null;
+        $fileType = null;
         
         // Try local disk (private storage)
         if (Storage::disk('local')->exists($filePath)) {
-            $fullPath = Storage::disk('local')->path($filePath);
-            $finalPath = $filePath;
+            try {
+                $fileSize = Storage::disk('local')->size($filePath);
+                $fileType = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+            } catch (\Exception $e) {
+                // File might not be accessible yet, skip
+                return;
+            }
         } 
         // Try public disk
         elseif (Storage::disk('public')->exists($filePath)) {
-            $fullPath = Storage::disk('public')->path($filePath);
-            $finalPath = $filePath;
+            try {
+                $fileSize = Storage::disk('public')->size($filePath);
+                $fileType = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+            } catch (\Exception $e) {
+                // File might not be accessible yet, skip
+                return;
+            }
         }
         // Try with full path from storage/app/
         elseif (Storage::disk('local')->exists(ltrim($filePath, '/'))) {
             $finalPath = ltrim($filePath, '/');
-            $fullPath = Storage::disk('local')->path($finalPath);
-            $data['file_name'] = $finalPath;
+            try {
+                $fileSize = Storage::disk('local')->size($finalPath);
+                $fileType = strtolower(pathinfo($finalPath, PATHINFO_EXTENSION));
+                $data['file_name'] = $finalPath;
+            } catch (\Exception $e) {
+                // File might not be accessible yet, skip
+                return;
+            }
         }
         else {
-            return; // File not found, skip
-        }
-        
-        if (!$fullPath || !file_exists($fullPath)) {
+            // File not found, skip
             return;
         }
         
-        // Get file extension and determine file type
-        $extension = strtolower(pathinfo($finalPath, PATHINFO_EXTENSION));
-        $data['file_type'] = $extension;
-        
-        // Get file size
-        $data['file_size'] = filesize($fullPath);
-        
-        // Generate download URL
-        $data['download_url'] = $finalPath;
+        // Set properties if we successfully retrieved them
+        if ($fileType) {
+            $data['file_type'] = $fileType;
+        }
+        if ($fileSize !== null) {
+            $data['file_size'] = $fileSize;
+        }
+        if (!empty($filePath)) {
+            $data['download_url'] = $filePath;
+        }
     }
     
     protected function afterSave(): void
     {
-        // After record is saved, update file properties if file was uploaded
+        // After record is saved, update file properties if file was uploaded/changed
+        // At this point, Filament has moved the file from livewire-tmp to final location
         $book = $this->record->fresh();
-        if ($book->file_name && (empty($book->file_type) || empty($book->file_size) || empty($book->download_url))) {
-            $data = ['file_name' => $book->file_name];
-            $this->setFileProperties($data);
+        if ($book->file_name) {
+            // Check if file properties need to be updated
+            $needsUpdate = empty($book->file_type) || empty($book->file_size) || empty($book->download_url);
             
-            if (isset($data['file_type']) || isset($data['file_size']) || isset($data['download_url'])) {
+            // Also check if file was just uploaded (might be in new location)
+            if (strpos($book->file_name, 'livewire-tmp') === false) {
+                $data = ['file_name' => $book->file_name];
+                $this->setFileProperties($data);
+                
                 $updateData = [];
-                if (isset($data['file_type'])) $updateData['file_type'] = $data['file_type'];
-                if (isset($data['file_size'])) $updateData['file_size'] = $data['file_size'];
-                if (isset($data['download_url'])) $updateData['download_url'] = $data['download_url'];
+                if (isset($data['file_type']) && !empty($data['file_type'])) {
+                    $updateData['file_type'] = $data['file_type'];
+                }
+                if (isset($data['file_size']) && !empty($data['file_size'])) {
+                    $updateData['file_size'] = $data['file_size'];
+                }
+                if (isset($data['download_url']) && !empty($data['download_url'])) {
+                    $updateData['download_url'] = $data['download_url'];
+                }
                 
                 if (!empty($updateData)) {
                     $book->update($updateData);
