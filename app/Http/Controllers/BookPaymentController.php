@@ -6,465 +6,276 @@ use App\Models\Book;
 use App\Models\BookPurchase;
 use App\Models\BookPayment;
 use App\Models\app_user;
-use App\Services\DpoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class BookPaymentController extends Controller
 {
-    protected $dpoService;
-
-    public function __construct(DpoService $dpoService)
-    {
-        $this->dpoService = $dpoService;
-    }
-
     /**
-     * Create payment token for book purchase.
+     * Create payment token for book purchase/donation.
+     * This follows the exact same pattern as CourseController::createPaymentToken
      */
     public function createPaymentToken(Request $request, $bookId)
     {
-        try {
-            Log::info('BookPaymentController: createPaymentToken called', [
-                'book_id' => $bookId,
-                'user_id' => $request->input('user_id'),
-                'purchase_type' => $request->input('purchase_type'),
-                'request_from_portal' => $request->input('request_from_portal'),
-                'origin' => $request->header('Origin'),
-            ]);
+        $CompanyToken = "55B69320-7B2D-451F-9846-4790DA901616";
+        $Request = "createToken";
+        $request_from_portal = filter_var($request->input('request_from_portal'), FILTER_VALIDATE_BOOLEAN);
+        $userId = request()->input('user_id');
+        $purchaseType = $request->input('purchase_type', 'purchase'); // 'purchase' or 'donation'
+        
+        $book = Book::findOrFail($bookId);
+        $userData = app_user::findOrFail($userId);
+        
+        $fullName = $userData->name;
+        $names = explode(' ', $fullName);
+        $firstName = isset($names[0]) ? $names[0] : '';
+        $lastName = isset($names[1]) ? $names[1] : '';
 
-            $book = Book::findOrFail($bookId);
-            $userId = $request->input('user_id');
-            $purchaseType = $request->input('purchase_type', 'purchase'); // 'purchase' or 'donation'
-            $requestFromPortal = filter_var($request->input('request_from_portal', false), FILTER_VALIDATE_BOOLEAN);
-
-            if (!$userId) {
-                Log::warning('BookPaymentController: User ID missing');
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'User ID is required',
-                    'code' => '400',
-                ], 400);
+        // Determine amount
+        $PaymentAmount = $book->price;
+        if ($purchaseType === 'donation') {
+            $donationAmount = $request->input('donation_amount');
+            if ($donationAmount && $donationAmount >= ($book->donation_min_amount ?? 0)) {
+                $PaymentAmount = $donationAmount;
+            } elseif ($book->donation_min_amount > 0) {
+                $PaymentAmount = $book->donation_min_amount;
             }
+        }
 
-            $user = app_user::findOrFail($userId);
+        // Check if user already purchased this book
+        $existingPurchase = BookPurchase::where('user_id', $userId)
+            ->where('book_id', $bookId)
+            ->where('status', 'completed')
+            ->first();
 
-            // Determine amount
-            $amount = $book->price;
-            if ($purchaseType === 'donation') {
-                $donationAmount = $request->input('donation_amount');
-                if ($donationAmount && $donationAmount >= ($book->donation_min_amount ?? 0)) {
-                    $amount = $donationAmount;
-                } elseif ($book->donation_min_amount > 0) {
-                    $amount = $book->donation_min_amount;
-                }
-            }
+        if ($existingPurchase) {
+            return response()->json([
+                'status' => 'FAILURE',
+                'message' => 'You have already purchased this book',
+                'code' => '400',
+            ], 400);
+        }
 
-            // Check if user already purchased
-            $existingPurchase = BookPurchase::where('user_id', $userId)
-                ->where('book_id', $bookId)
-                ->where('status', 'completed')
-                ->first();
+        $PaymentCurrency = "TZS";
+        $CompanyRef = "BOOK-" . $bookId . "-" . $userId;
 
-            if ($existingPurchase) {
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'You have already purchased this book',
-                    'code' => '400',
-                    'data' => [
-                        'purchase_id' => $existingPurchase->id,
-                        'existing_purchase' => true,
-                    ],
-                ], 400);
-            }
+        // The redirect and back URL
+        // --- CONDITIONAL REDIRECT URLS ---
+        if ($request_from_portal) {
+            $paymentTypeParam = $purchaseType === 'donation' ? 'type=book&donation=true' : 'type=book';
+            $RedirectURL = "https://kasome.com/payment-status?" . $paymentTypeParam;
+            $BackURL = "https://kasome.com/payment-status?" . $paymentTypeParam;
+        } else {
+            $RedirectURL = "https://portal.kasome.com/payurl.php";
+            $BackURL = "https://portal.kasome.com/backurl.php";
+        }
+        // --- END CONDITIONAL REDIRECT URLS ---
 
-            // Create payment record
-            // payment_type must be 'book_purchase' or 'donation' (check constraint)
-            $paymentType = $purchaseType === 'donation' ? 'donation' : 'book_purchase';
-            
-            Log::info('Creating BookPayment record', [
-                'user_id' => $userId,
-                'book_id' => $bookId,
-                'amount' => $amount,
-                'payment_type' => $paymentType,
-                'purchase_type' => $purchaseType,
-            ]);
-            
-            try {
-                $payment = BookPayment::create([
-                    'user_id' => $userId,
-                    'book_id' => $bookId,
-                    'amount' => $amount,
-                    'status' => 'pending',
-                    'payment_type' => $paymentType,
-                    'donation_type' => $purchaseType === 'donation' ? 'book' : null,
-                    'donation_title' => $purchaseType === 'donation' ? $book->title : null,
-                    'is_anonymous' => $request->input('is_anonymous', false),
-                    'donor_name' => $request->input('donor_name'),
-                    'donor_message' => $request->input('donor_message'),
-                    'created_by' => $userId,
-                ]);
-                Log::info('BookPayment created successfully', ['payment_id' => $payment->id]);
-            } catch (\Exception $dbError) {
-                Log::error('Failed to create BookPayment', [
-                    'error' => $dbError->getMessage(),
-                    'trace' => $dbError->getTraceAsString(),
-                    'user_id' => $userId,
-                    'book_id' => $bookId,
-                ]);
-                throw $dbError;
-            }
+        $CompanyRefUnique = "0";
+        $PTL = "96";
+        $PTLtype = "hours";
+        $ServiceType = "29617";
+        $ServiceDescription = $purchaseType === 'donation' ? "Book Donation: " . $book->title : "Book: " . $book->title;
+        $FraudTimeLimit = "60";
+        $ServiceDate = date("Y/m/d H:i");
+        $DefaultPayment = "MO";
+        $customerFirstName = $firstName;
+        $customerLastName = $lastName;
+        $customerPhone = $userData->phone;
+        $customerEmail = $userData->email;
+        $customerCity = $userData->region;
+        $customerAddress = $userData->district;
+        $customerCountry = "TZ";
+        $customerZip = "255";
 
-            // Prepare DPO payment request
-            $companyToken = "55B69320-7B2D-451F-9846-4790DA901616";
-            $fullName = $user->name;
-            $names = explode(' ', $fullName);
-            $firstName = $names[0] ?? '';
-            $lastName = isset($names[1]) ? $names[1] : '';
-
-            // Redirect URLs
-            if ($requestFromPortal) {
-                $paymentTypeParam = $purchaseType === 'donation' ? 'type=book&donation=true' : 'type=book';
-                // Use localhost for development, production URL otherwise
-                $origin = $request->header('Origin', '');
-                $baseUrl = 'https://kasome.com'; // Default to production
-                
-                // Check if Origin contains localhost
-                if ($origin && str_contains($origin, 'localhost')) {
-                    $baseUrl = 'http://localhost:3000';
-                } elseif ($origin && str_contains($origin, '127.0.0.1')) {
-                    $baseUrl = 'http://127.0.0.1:3000';
-                }
-                
-                $redirectURL = $baseUrl . "/payment-status?" . $paymentTypeParam;
-                $backURL = str_replace('/payment-status', '/api/dpo-callback', $baseUrl);
-            } else {
-                $redirectURL = "https://portal.kasome.com/payurl.php";
-                $backURL = "https://portal.kasome.com/backurl.php";
-            }
-
-            $xmlData = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n
+        $curl = curl_init();
+        curl_setopt_array($curl, array(
+            CURLOPT_URL => "https://secure.3gdirectpay.com/API/v6/",
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => "",
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 60,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => "POST",
+            CURLOPT_POSTFIELDS => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n
             <API3G>\r\n
-                <CompanyToken>" . $companyToken . "</CompanyToken>\r\n
-                <Request>createToken</Request>\r\n
+                <CompanyToken>" . $CompanyToken . "</CompanyToken>\r\n
+                <Request>" . $Request . "</Request>\r\n
                 <Transaction>\r\n
-                    <PaymentAmount>" . $amount . "</PaymentAmount>\r\n
-                    <PaymentCurrency>TZS</PaymentCurrency>\r\n
-                    <CompanyRef>BOOK-" . $bookId . "-" . $userId . "</CompanyRef>\r\n
-                    <RedirectURL>" . $redirectURL . "</RedirectURL>\r\n
-                    <BackURL>" . $backURL . "</BackURL>\r\n
-                    <CompanyRefUnique>0</CompanyRefUnique>\r\n
-                    <PTL>96</PTL>\r\n
-                    <PTLtype>hours</PTLtype>\r\n
-                    <customerFirstName>" . $firstName . "</customerFirstName>\r\n
-                    <customerLastName>" . $lastName . "</customerLastName>\r\n
-                    <customerPhone>" . $user->phone . "</customerPhone>\r\n
-                    <customerZip>255</customerZip>\r\n
-                    <customerCity>" . ($user->region ?? 'Dar es Salaam') . "</customerCity>\r\n
-                    <customerAddress>" . ($user->district ?? '') . "</customerAddress>\r\n
-                    <DefaultPayment>MO</DefaultPayment>\r\n
-                    <customerCountry>TZ</customerCountry>\r\n
-                    <customerEmail>" . ($user->email ?? '') . "</customerEmail>\r\n
-                    <FraudTimeLimit>60</FraudTimeLimit>\r\n
+                    <PaymentAmount>" . $PaymentAmount . "</PaymentAmount>\r\n
+                    <PaymentCurrency>" . $PaymentCurrency . "</PaymentCurrency>\r\n
+                    <CompanyRef>" . $CompanyRef . "</CompanyRef>\r\n
+                    <RedirectURL>" . $RedirectURL . "</RedirectURL>\r\n
+                    <BackURL>" . $BackURL . "</BackURL>\r\n
+                    <CompanyRefUnique>" . $CompanyRefUnique . "</CompanyRefUnique>\r\n
+                    <PTL>" . $PTL . "</PTL>\r\n
+                    <PTLtype>" . $PTLtype . "</PTLtype>\r\n
+                    <customerFirstName>" . $customerFirstName . "</customerFirstName>
+                    <customerLastName>" . $customerLastName . "</customerLastName>
+                    <customerPhone>" . $customerPhone . "</customerPhone>
+                    <customerZip>" . $customerZip . "</customerZip>
+                    <customerCity>" . $customerCity . "</customerCity>
+                    <customerAddress>" . $customerAddress . "</customerAddress>
+                    <DefaultPayment>" . $DefaultPayment . "</DefaultPayment>
+                    <customerCountry>" . $customerCountry . "</customerCountry>
+                    <customerEmail>" . $customerEmail . "</customerEmail>\r\n
+                    <FraudTimeLimit>" . $FraudTimeLimit . "</FraudTimeLimit>\r\n
                 </Transaction>\r\n
                 <Services>\r\n
                     <Service>\r\n
-                        <ServiceType>29617</ServiceType>\r\n
-                        <ServiceDescription>Book: " . $book->title . "</ServiceDescription>\r\n
-                        <ServiceDate>" . date("Y/m/d H:i") . "</ServiceDate>\r\n
+                        <ServiceType>" . $ServiceType . "</ServiceType>\r\n
+                        <ServiceDescription>" . $ServiceDescription . "</ServiceDescription>\r\n
+                        <ServiceDate>" . $ServiceDate . "</ServiceDate>\r\n
                     </Service>\r\n
                 </Services>\r\n
-            </API3G>";
+            </API3G>",
+            CURLOPT_HTTPHEADER => array(
+                "Cache-Control: no-cache",
+                "Content-Type: application/xml"
+            ),
+        ));
 
-            $curl = curl_init();
-            curl_setopt_array($curl, array(
-                CURLOPT_URL => "https://secure.3gdirectpay.com/API/v6/",
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_ENCODING => "",
-                CURLOPT_MAXREDIRS => 10,
-                CURLOPT_TIMEOUT => 60,
-                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                CURLOPT_CUSTOMREQUEST => "POST",
-                CURLOPT_POSTFIELDS => $xmlData,
-                CURLOPT_HTTPHEADER => array(
-                    "Cache-Control: no-cache",
-                    "Content-Type: application/xml"
-                ),
-            ));
+        $Response = curl_exec($curl);
+        $err = curl_error($curl);
+        curl_close($curl);
 
-            $response = curl_exec($curl);
-            $err = curl_error($curl);
-            $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-            curl_close($curl);
-
-            if ($err) {
-                Log::error('DPO cURL Error: ' . $err, [
-                    'book_id' => $bookId,
-                    'user_id' => $userId,
-                ]);
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Payment gateway connection error: ' . $err,
-                    'error' => $err,
-                ], 500);
-            }
-
-            // Log raw response for debugging
-            Log::info('DPO API Response', [
-                'http_code' => $httpCode,
-                'response_length' => strlen($response),
-                'response_preview' => substr($response, 0, 500),
-            ]);
-
-            // Parse XML response
-            $xmlResponse = @simplexml_load_string($response);
-            
-            if ($xmlResponse === false) {
-                Log::error('Failed to parse DPO XML response', [
-                    'response' => $response,
-                    'book_id' => $bookId,
-                    'user_id' => $userId,
-                ]);
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Invalid response from payment gateway',
-                    'error' => 'Failed to parse XML response',
-                ], 500);
-            }
-
-            $result = (string) ($xmlResponse->Result ?? '');
-            $resultExplanation = (string) ($xmlResponse->ResultExplanation ?? '');
-            $transactionToken = (string) ($xmlResponse->TransToken ?? '');
-
-            Log::info('DPO API Result', [
-                'result' => $result,
-                'result_explanation' => $resultExplanation,
-                'has_token' => !empty($transactionToken),
-            ]);
-
-            if ($result === '000' && $transactionToken) {
-                // Update payment with transaction token
-                $payment->update([
-                    'transactiontoken' => $transactionToken,
-                    'transref' => 'BOOK-' . $bookId . '-' . $userId,
-                ]);
-
-                // Build payment URL
-                $paymentUrl = "https://secure.3gdirectpay.com/payv2.php?ID=" . $transactionToken;
-
-                return response()->json([
-                    'status' => 'SUCCESS',
-                    'message' => 'Payment token created successfully',
-                    'data' => [
-                        'token' => $transactionToken,
-                        'payment_url' => $paymentUrl,
-                        'payment_id' => $payment->id,
-                    ],
-                ], 200);
-            } else {
-                $errorMessage = $resultExplanation ?: ('DPO API returned error code: ' . ($result ?: 'UNKNOWN'));
-                Log::error('DPO API returned error', [
-                    'result' => $result,
-                    'result_explanation' => $resultExplanation,
-                    'book_id' => $bookId,
-                    'user_id' => $userId,
-                    'xml_response' => $response,
-                ]);
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Failed to create payment token: ' . $errorMessage,
-                    'code' => $result ?: 'UNKNOWN',
-                    'error_details' => [
-                        'result' => $result,
-                        'result_explanation' => $resultExplanation,
-                    ],
-                ], 400);
-            }
-
-        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
-            Log::error('Model not found in BookPaymentController', [
-                'exception' => get_class($e),
-                'message' => $e->getMessage(),
-                'book_id' => $bookId ?? null,
-                'user_id' => $request->input('user_id'),
-            ]);
+        if ($err) {
             return response()->json([
                 'status' => 'FAILURE',
-                'message' => 'Book or user not found',
-                'code' => '404',
-            ], 404);
-        } catch (\Exception $e) {
-            Log::error('Error creating payment token: ' . $e->getMessage(), [
-                'exception' => get_class($e),
-                'trace' => $e->getTraceAsString(),
-                'book_id' => $bookId ?? null,
-                'user_id' => $request->input('user_id'),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-            return response()->json([
-                'status' => 'FAILURE',
-                'message' => 'Failed to create payment token: ' . $e->getMessage(),
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+                'message' => 'Payment gateway connection error',
                 'code' => '500',
             ], 500);
+        } else {
+            // return the token (same as CourseController)
+            $xml = simplexml_load_string($Response);
+            $token = json_encode($xml, JSON_UNESCAPED_SLASHES);
+            $TransToken = $xml->xpath('//API3G/TransToken')[0];
+            $data = json_decode($token, true);
+
+            // Determine payment_type for database
+            $paymentType = $purchaseType === 'donation' ? 'donation' : 'book_purchase';
+
+            // Create payment record (after getting token, like CourseController)
+            $payment = BookPayment::create([
+                'amount' => $PaymentAmount,
+                'status' => 'pending',
+                'transactiontoken' => $data['TransToken'],
+                'transref' => $data['TransRef'] ?? $CompanyRef,
+                'user_id' => $userId,
+                'book_id' => $bookId,
+                'payment_type' => $paymentType,
+                'donation_type' => $purchaseType === 'donation' ? 'book' : null,
+                'donation_title' => $purchaseType === 'donation' ? $book->title : null,
+                'is_anonymous' => $request->input('is_anonymous', false),
+                'donor_name' => $request->input('donor_name'),
+                'donor_message' => $request->input('donor_message'),
+                'created_at' => date('Y-m-d H:i:s'),
+                'created_by' => $userId,
+                'updated_at' => date('Y-m-d H:i:s'),
+                'updated_by' => $userId
+            ]);
+
+            // Return same format as CourseController
+            return response()->json([
+                'status' => 'SUCCESS',
+                'code' => '200',
+                'token' => $data['TransToken'],
+                'message' => 'Token set successfully'
+            ]);
         }
     }
 
     /**
-     * Handle DPO payment callback.
+     * Handle DPO payment callback
      */
     public function paymentCallback(Request $request)
     {
-        try {
-            $transactionToken = $request->input('TransactionToken');
-            $pnrid = $request->input('PnrID');
-            $ccdapproval = $request->input('CCDapproval');
-            $transid = $request->input('TransID');
+        $transactiontoken = request()->input('TransactionToken');
+        $pnrid = request()->input('PnrID');
+        $ccdapproval = request()->input('CCDapproval');
+        $transid = request()->input('TransID');
 
-            if (!$transactionToken) {
-                Log::error('Book payment callback: Missing TransactionToken');
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Missing transaction token',
-                ], 400);
-            }
+        $payment = BookPayment::where("transactiontoken", $transactiontoken)->first();
 
-            // Find payment by transaction token
-            $payment = BookPayment::where('transactiontoken', $transactionToken)
-                ->where('status', 'pending')
-                ->first();
-
-            if (!$payment) {
-                Log::error('Book payment callback: Payment not found for token ' . $transactionToken);
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Payment not found',
-                ], 404);
-            }
-
-            // Verify payment with DPO
-            $isPaid = $this->dpoService->verifyToken($transactionToken);
-
-            if ($isPaid) {
-                DB::beginTransaction();
-
-                try {
-                    // Update payment status
-                    $payment->update([
-                        'status' => 'settled',
-                        'pnrid' => $pnrid,
-                        'ccdapproval' => $ccdapproval,
-                        'transid' => $transid,
-                        'updated_at' => Carbon::now(),
-                        'updated_by' => $payment->user_id,
-                    ]);
-
-                    // Create or update book purchase
-                    $purchase = BookPurchase::firstOrCreate(
-                        [
-                            'user_id' => $payment->user_id,
-                            'book_id' => $payment->book_id,
-                            'status' => 'completed',
-                        ],
-                        [
-                            'payment_id' => $payment->id,
-                            'purchase_type' => $payment->donation_type ? 'donation' : 'purchase',
-                            'delivery_method' => 'digital',
-                            'download_count' => 0,
-                            'max_downloads' => 5, // Default max downloads
-                            'purchased_at' => Carbon::now(),
-                            'created_by' => $payment->user_id,
-                        ]
-                    );
-
-                    // Generate download token
-                    $purchase->generateDownloadToken(24); // 24 hours expiry
-
-                    // Link payment to purchase
-                    $payment->update([
-                        'book_purchase_id' => $purchase->id,
-                    ]);
-
-                    DB::commit();
-
-                    Log::info('Book payment successful: Payment ID ' . $payment->id . ', Purchase ID ' . $purchase->id);
-
-                    return response()->json([
-                        'status' => 'SUCCESS',
-                        'message' => 'Payment processed successfully',
-                        'data' => [
-                            'payment_id' => $payment->id,
-                            'purchase_id' => $purchase->id,
-                        ],
-                    ], 200);
-
-                } catch (\Exception $e) {
-                    DB::rollBack();
-                    throw $e;
-                }
-
-            } else {
-                // Payment failed
-                $payment->update([
-                    'status' => 'failed',
-                    'updated_at' => Carbon::now(),
-                ]);
-
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Payment verification failed',
-                ], 400);
-            }
-
-        } catch (\Exception $e) {
-            Log::error('Book payment callback error: ' . $e->getMessage());
+        if (!$payment) {
             return response()->json([
                 'status' => 'FAILURE',
-                'message' => 'Error processing payment callback',
-                'error' => $e->getMessage(),
-            ], 500);
+                'message' => 'Payment not found',
+                'code' => '404',
+            ], 404);
         }
+
+        $update_payments = BookPayment::where("transactiontoken", $transactiontoken)->update([
+            'pnrid' => $pnrid,
+            'status' => 'settled',
+            'ccdapproval' => $ccdapproval,
+            'transid' => $transid,
+            'updated_at' => date('Y-m-d H:i:s'),
+            'updated_by' => $payment->user_id,
+        ]);
+
+        if (!$update_payments) {
+            return response()->json([
+                'status' => 'FAILURE',
+                'code' => '200',
+                'data' => $payment->user_id,
+                'message' => "Payment failed to be updated"
+            ]);
+        }
+
+        // Create or update BookPurchase record
+        $purchase = BookPurchase::updateOrCreate(
+            [
+                'user_id' => $payment->user_id,
+                'book_id' => $payment->book_id,
+            ],
+            [
+                'amount' => $payment->amount,
+                'status' => 'completed',
+                'purchase_type' => $payment->payment_type === 'donation' ? 'donation' : 'purchase',
+                'book_payment_id' => $payment->id,
+                'purchased_at' => Carbon::now(),
+                'created_by' => $payment->user_id,
+                'updated_by' => $payment->user_id,
+            ]
+        );
+
+        // Link payment to purchase
+        $payment->update(['book_purchase_id' => $purchase->id]);
+
+        return response()->json([
+            'status' => 'SUCCESS',
+            'code' => '200',
+            'data' => $update_payments,
+            'message' => "Payment updated successfully"
+        ]);
     }
 
     /**
-     * Check payment status.
+     * Check payment status by token
      */
     public function paymentStatus($token)
     {
-        try {
-            $payment = BookPayment::where('transactiontoken', $token)->first();
+        $payment = BookPayment::where('transactiontoken', $token)->first();
 
-            if (!$payment) {
-                return response()->json([
-                    'status' => 'FAILURE',
-                    'message' => 'Payment not found',
-                ], 404);
-            }
-
-            return response()->json([
-                'status' => 'SUCCESS',
-                'message' => 'Payment status retrieved',
-                'data' => [
-                    'payment_id' => $payment->id,
-                    'status' => $payment->status,
-                    'amount' => $payment->amount,
-                    'book_id' => $payment->book_id,
-                    'book' => $payment->book,
-                    'purchase_id' => $payment->book_purchase_id,
-                ],
-            ], 200);
-
-        } catch (\Exception $e) {
-            Log::error('Error checking payment status: ' . $e->getMessage());
+        if (!$payment) {
             return response()->json([
                 'status' => 'FAILURE',
-                'message' => 'Failed to check payment status',
-                'error' => $e->getMessage(),
-            ], 500);
+                'message' => 'Payment not found',
+                'code' => '404',
+            ], 404);
         }
+
+        return response()->json([
+            'status' => 'SUCCESS',
+            'data' => [
+                'payment_id' => $payment->id,
+                'status' => $payment->status,
+                'amount' => $payment->amount,
+                'book_id' => $payment->book_id,
+            ],
+            'message' => 'Payment status retrieved successfully'
+        ]);
     }
 }
-
