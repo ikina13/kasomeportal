@@ -54,8 +54,16 @@ class EditBook extends EditRecord
         $filePath = $data['file_name'];
         
         // Skip if file is still in livewire-tmp (temporary upload location)
+        // Also skip if it looks like an image (cover image) - we don't need file_size for images
         if (strpos($filePath, 'livewire-tmp') !== false) {
             return;
+        }
+        
+        // Skip image files - we only need file_size/file_type for book files (PDF, EPUB)
+        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+        $imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
+        if (in_array($extension, $imageExtensions)) {
+            return; // Don't process file_size for images
         }
         
         // Filament FileUpload stores files relative to the disk root
@@ -66,20 +74,20 @@ class EditBook extends EditRecord
         // Try local disk (private storage)
         if (Storage::disk('local')->exists($filePath)) {
             try {
-                $fileSize = Storage::disk('local')->size($filePath);
-                $fileType = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+                $fileSize = @Storage::disk('local')->size($filePath); // Suppress errors
+                $fileType = $extension ?: strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
             } catch (\Exception $e) {
-                // File might not be accessible yet, skip
+                // Silently skip if file is not accessible
                 return;
             }
         } 
         // Try public disk
         elseif (Storage::disk('public')->exists($filePath)) {
             try {
-                $fileSize = Storage::disk('public')->size($filePath);
-                $fileType = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+                $fileSize = @Storage::disk('public')->size($filePath); // Suppress errors
+                $fileType = $extension ?: strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
             } catch (\Exception $e) {
-                // File might not be accessible yet, skip
+                // Silently skip if file is not accessible
                 return;
             }
         }
@@ -87,16 +95,16 @@ class EditBook extends EditRecord
         elseif (Storage::disk('local')->exists(ltrim($filePath, '/'))) {
             $finalPath = ltrim($filePath, '/');
             try {
-                $fileSize = Storage::disk('local')->size($finalPath);
-                $fileType = strtolower(pathinfo($finalPath, PATHINFO_EXTENSION));
+                $fileSize = @Storage::disk('local')->size($finalPath); // Suppress errors
+                $fileType = $extension ?: strtolower(pathinfo($finalPath, PATHINFO_EXTENSION));
                 $data['file_name'] = $finalPath;
             } catch (\Exception $e) {
-                // File might not be accessible yet, skip
+                // Silently skip if file is not accessible
                 return;
             }
         }
         else {
-            // File not found, skip
+            // File not found, skip silently
             return;
         }
         
@@ -104,7 +112,7 @@ class EditBook extends EditRecord
         if ($fileType) {
             $data['file_type'] = $fileType;
         }
-        if ($fileSize !== null) {
+        if ($fileSize !== null && $fileSize > 0) {
             $data['file_size'] = $fileSize;
         }
         if (!empty($filePath)) {

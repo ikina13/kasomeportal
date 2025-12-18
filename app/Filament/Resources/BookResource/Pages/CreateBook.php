@@ -99,26 +99,30 @@ class CreateBook extends CreateRecord
     
     protected function afterCreate(): void
     {
-        // After record is created, update file properties
+        // After record is created, update file properties ONLY for book files (file_name)
         // At this point, Filament has moved the file from livewire-tmp to final location
+        // Note: We skip file_size, file_type for images (image_url) - they're not needed
         $book = $this->record->fresh();
         if ($book->file_name) {
-            $data = ['file_name' => $book->file_name];
-            $this->setFileProperties($data);
-            
-            $updateData = [];
-            if (isset($data['file_type']) && !empty($data['file_type'])) {
-                $updateData['file_type'] = $data['file_type'];
-            }
-            if (isset($data['file_size']) && !empty($data['file_size'])) {
-                $updateData['file_size'] = $data['file_size'];
-            }
-            if (isset($data['download_url']) && !empty($data['download_url'])) {
-                $updateData['download_url'] = $data['download_url'];
-            }
-            
-            if (!empty($updateData)) {
-                $book->update($updateData);
+            // Only process file properties if it's not a temporary file
+            if (strpos($book->file_name, 'livewire-tmp') === false) {
+                $data = ['file_name' => $book->file_name];
+                $this->setFileProperties($data);
+                
+                $updateData = [];
+                if (isset($data['file_type']) && !empty($data['file_type'])) {
+                    $updateData['file_type'] = $data['file_type'];
+                }
+                if (isset($data['file_size']) && !empty($data['file_size'])) {
+                    $updateData['file_size'] = $data['file_size'];
+                }
+                if (isset($data['download_url']) && !empty($data['download_url'])) {
+                    $updateData['download_url'] = $data['download_url'];
+                }
+                
+                if (!empty($updateData)) {
+                    $book->update($updateData);
+                }
             }
         }
     }
