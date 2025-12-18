@@ -2,6 +2,7 @@
 # Run database migrations
 print_status "Running database migrations..."
 php artisan migrate --force
+git pull origin main
 
 # Clear and cache config
 print_status "Optimizing application..."
