@@ -27,12 +27,21 @@ class BookPaymentController extends Controller
     public function createPaymentToken(Request $request, $bookId)
     {
         try {
+            Log::info('BookPaymentController: createPaymentToken called', [
+                'book_id' => $bookId,
+                'user_id' => $request->input('user_id'),
+                'purchase_type' => $request->input('purchase_type'),
+                'request_from_portal' => $request->input('request_from_portal'),
+                'origin' => $request->header('Origin'),
+            ]);
+
             $book = Book::findOrFail($bookId);
             $userId = $request->input('user_id');
             $purchaseType = $request->input('purchase_type', 'purchase'); // 'purchase' or 'donation'
             $requestFromPortal = filter_var($request->input('request_from_portal', false), FILTER_VALIDATE_BOOLEAN);
 
             if (!$userId) {
+                Log::warning('BookPaymentController: User ID missing');
                 return response()->json([
                     'status' => 'FAILURE',
                     'message' => 'User ID is required',
@@ -95,8 +104,20 @@ class BookPaymentController extends Controller
 
             // Redirect URLs
             if ($requestFromPortal) {
-                $redirectURL = "https://kasome.com/payment-status";
-                $backURL = "https://kasome.com/api/dpo-callback";
+                $paymentTypeParam = $purchaseType === 'donation' ? 'type=book&donation=true' : 'type=book';
+                // Use localhost for development, production URL otherwise
+                $origin = $request->header('Origin', '');
+                $baseUrl = 'https://kasome.com'; // Default to production
+                
+                // Check if Origin contains localhost
+                if ($origin && str_contains($origin, 'localhost')) {
+                    $baseUrl = 'http://localhost:3000';
+                } elseif ($origin && str_contains($origin, '127.0.0.1')) {
+                    $baseUrl = 'http://127.0.0.1:3000';
+                }
+                
+                $redirectURL = $baseUrl . "/payment-status?" . $paymentTypeParam;
+                $backURL = str_replace('/payment-status', '/api/dpo-callback', $baseUrl);
             } else {
                 $redirectURL = "https://portal.kasome.com/payurl.php";
                 $backURL = "https://portal.kasome.com/backurl.php";
@@ -198,11 +219,17 @@ class BookPaymentController extends Controller
             }
 
         } catch (\Exception $e) {
-            Log::error('Error creating payment token: ' . $e->getMessage());
+            Log::error('Error creating payment token: ' . $e->getMessage(), [
+                'exception' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+                'book_id' => $bookId ?? null,
+                'user_id' => $request->input('user_id'),
+            ]);
             return response()->json([
                 'status' => 'FAILURE',
-                'message' => 'Failed to create payment token',
-                'error' => $e->getMessage(),
+                'message' => 'Failed to create payment token: ' . $e->getMessage(),
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+                'code' => '500',
             ], 500);
         }
     }
