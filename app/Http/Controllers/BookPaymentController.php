@@ -8,6 +8,7 @@ use App\Models\BookPayment;
 use App\Models\app_user;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 
 class BookPaymentController extends Controller
@@ -191,65 +192,140 @@ class BookPaymentController extends Controller
      */
     public function paymentCallback(Request $request)
     {
-        $transactiontoken = request()->input('TransactionToken');
-        $pnrid = request()->input('PnrID');
-        $ccdapproval = request()->input('CCDapproval');
-        $transid = request()->input('TransID');
+        try {
+            $transactiontoken = request()->input('TransactionToken');
+            $pnrid = request()->input('PnrID');
+            $ccdapproval = request()->input('CCDapproval');
+            $transid = request()->input('TransID');
 
-        $payment = BookPayment::where("transactiontoken", $transactiontoken)->first();
-
-        if (!$payment) {
-            return response()->json([
-                'status' => 'FAILURE',
-                'message' => 'Payment not found',
-                'code' => '404',
-            ], 404);
-        }
-
-        $update_payments = BookPayment::where("transactiontoken", $transactiontoken)->update([
-            'pnrid' => $pnrid,
-            'status' => 'settled',
-            'ccdapproval' => $ccdapproval,
-            'transid' => $transid,
-            'updated_at' => date('Y-m-d H:i:s'),
-            'updated_by' => $payment->user_id,
-        ]);
-
-        if (!$update_payments) {
-            return response()->json([
-                'status' => 'FAILURE',
-                'code' => '200',
-                'data' => $payment->user_id,
-                'message' => "Payment failed to be updated"
+            Log::info('BookPaymentController: paymentCallback called', [
+                'transactiontoken' => $transactiontoken,
+                'pnrid' => $pnrid,
+                'transid' => $transid,
             ]);
+
+            if (!$transactiontoken) {
+                Log::error('BookPaymentController: Missing TransactionToken');
+                return response()->json([
+                    'status' => 'FAILURE',
+                    'message' => 'TransactionToken is required',
+                    'code' => '400',
+                ], 400);
+            }
+
+            $payment = BookPayment::where("transactiontoken", $transactiontoken)->first();
+
+            if (!$payment) {
+                Log::error('BookPaymentController: Payment not found', [
+                    'transactiontoken' => $transactiontoken,
+                ]);
+                return response()->json([
+                    'status' => 'FAILURE',
+                    'message' => 'Payment not found',
+                    'code' => '404',
+                ], 404);
+            }
+
+            // Update payment record (same pattern as CourseController)
+            // Only update if payment is still pending (to avoid duplicate updates)
+            if ($payment->status === 'pending') {
+                $update_payments = BookPayment::where("transactiontoken", $transactiontoken)
+                    ->where('status', 'pending')
+                    ->update([
+                        'pnrid' => $pnrid,
+                        'status' => 'settled',
+                        'ccdapproval' => $ccdapproval,
+                        'transid' => $transid,
+                        'updated_at' => Carbon::now(),
+                        'updated_by' => $payment->user_id,
+                    ]);
+
+                if ($update_payments === false) {
+                    Log::error('BookPaymentController: Database error updating payment', [
+                        'payment_id' => $payment->id,
+                        'transactiontoken' => $transactiontoken,
+                    ]);
+                    return response()->json([
+                        'status' => 'FAILED',
+                        'code' => '200',
+                        'data' => $payment->user_id,
+                        'message' => "Payment failed to be updated"
+                    ], 200);
+                }
+            } else {
+                // Payment already settled - log and continue
+                Log::info('BookPaymentController: Payment already settled', [
+                    'payment_id' => $payment->id,
+                    'status' => $payment->status,
+                ]);
+            }
+            
+            // Refresh payment model to get updated values
+            $payment->refresh();
+
+            // Create or update BookPurchase record
+            try {
+                $purchaseData = [
+                    'status' => 'completed',
+                    'purchased_at' => Carbon::now(),
+                    'created_by' => $payment->user_id,
+                    'updated_by' => $payment->user_id,
+                ];
+                
+                // Only add purchase_type if column exists
+                if (Schema::hasColumn('tbl_book_purchases', 'purchase_type') && $payment->payment_type) {
+                    $purchaseData['purchase_type'] = $payment->payment_type === 'donation' ? 'donation' : 'purchase';
+                }
+                
+                // Add payment_id if column exists
+                if (Schema::hasColumn('tbl_book_purchases', 'payment_id')) {
+                    $purchaseData['payment_id'] = $payment->id;
+                }
+                
+                $purchase = BookPurchase::updateOrCreate(
+                    [
+                        'user_id' => $payment->user_id,
+                        'book_id' => $payment->book_id,
+                    ],
+                    $purchaseData
+                );
+
+                // Link payment to purchase if book_purchase_id column exists
+                if (Schema::hasColumn('tbl_books_payment', 'book_purchase_id') && !$payment->book_purchase_id) {
+                    $payment->book_purchase_id = $purchase->id;
+                    $payment->save();
+                }
+
+                Log::info('BookPaymentController: Payment updated successfully', [
+                    'payment_id' => $payment->id,
+                    'purchase_id' => $purchase->id,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('BookPaymentController: Error creating purchase', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                // Continue even if purchase creation fails - payment is still updated
+            }
+
+            return response()->json([
+                'status' => 'SUCCESS',
+                'code' => '200',
+                'data' => 1,
+                'message' => "Payment updated successfully"
+            ]);
+        } catch (\Exception $e) {
+            Log::error('BookPaymentController: Exception in paymentCallback', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request_data' => $request->all(),
+            ]);
+            return response()->json([
+                'status' => 'FAILURE',
+                'message' => 'Error processing payment callback: ' . $e->getMessage(),
+                'code' => '500',
+            ], 500);
         }
-
-        // Create or update BookPurchase record
-        $purchase = BookPurchase::updateOrCreate(
-            [
-                'user_id' => $payment->user_id,
-                'book_id' => $payment->book_id,
-            ],
-            [
-                'amount' => $payment->amount,
-                'status' => 'completed',
-                'purchase_type' => $payment->payment_type === 'donation' ? 'donation' : 'purchase',
-                'book_payment_id' => $payment->id,
-                'purchased_at' => Carbon::now(),
-                'created_by' => $payment->user_id,
-                'updated_by' => $payment->user_id,
-            ]
-        );
-
-        // Link payment to purchase
-        $payment->update(['book_purchase_id' => $purchase->id]);
-
-        return response()->json([
-            'status' => 'SUCCESS',
-            'code' => '200',
-            'data' => $update_payments,
-            'message' => "Payment updated successfully"
-        ]);
     }
 
     /**
