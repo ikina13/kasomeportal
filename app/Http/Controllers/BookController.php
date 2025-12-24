@@ -249,7 +249,8 @@ class BookController extends Controller
                 $fileName = $book->file_name ? basename($book->file_name) : ($book->title . '.' . ($book->file_type ?? 'pdf'));
                 
                 return response()->download($fullPath, $fileName, [
-                    'Content-Type' => $book->file_type === 'pdf' ? 'application/pdf' : 'application/epub+zip',
+                    'Content-Type' => $book->file_type === 'pdf' ? 'application/pdf' : ($book->file_type === 'epub' ? 'application/epub+zip' : 'application/octet-stream'),
+                    'Content-Disposition' => 'attachment; filename="' . addslashes($fileName) . '"',
                 ]);
             } elseif (Storage::disk('public')->exists($filePath)) {
                 // File is in public storage
@@ -257,7 +258,8 @@ class BookController extends Controller
                 $fileName = $book->file_name ? basename($book->file_name) : ($book->title . '.' . ($book->file_type ?? 'pdf'));
                 
                 return response()->download($fullPath, $fileName, [
-                    'Content-Type' => $book->file_type === 'pdf' ? 'application/pdf' : 'application/epub+zip',
+                    'Content-Type' => $book->file_type === 'pdf' ? 'application/pdf' : ($book->file_type === 'epub' ? 'application/epub+zip' : 'application/octet-stream'),
+                    'Content-Disposition' => 'attachment; filename="' . addslashes($fileName) . '"',
                 ]);
             } elseif (filter_var($filePath, FILTER_VALIDATE_URL)) {
                 // External URL - return JSON with URL
@@ -315,7 +317,9 @@ class BookController extends Controller
             // Get all purchases for the user with status completed
             $purchases = BookPurchase::where('user_id', $userId)
                 ->where('status', 'completed')
-                ->with(['book.authorModel', 'payment'])
+                ->with(['book' => function($query) {
+                    $query->with('authorModel');
+                }, 'payment'])
                 ->orderBy('purchased_at', 'desc')
                 ->get();
 
@@ -330,9 +334,64 @@ class BookController extends Controller
             });
 
             $purchases = $purchases->map(function($purchase) {
+                $book = $purchase->book;
+                
+                // Ensure authorModel is loaded - try refreshing if not loaded
+                if (!$book->relationLoaded('authorModel')) {
+                    $book->load('authorModel');
+                }
+                
+                // If still null, try to load it directly
+                if (!$book->authorModel && $book->author_id) {
+                    $author = \App\Models\author_model::find($book->author_id);
+                    if ($author) {
+                        $book->setRelation('authorModel', $author);
+                    }
+                }
+                
+                // Log for debugging
+                Log::info('BookController: Processing purchase', [
+                    'book_id' => $book->id,
+                    'author_id' => $book->author_id,
+                    'has_authorModel' => $book->authorModel ? 'yes' : 'no',
+                    'author_name' => $book->authorModel ? $book->authorModel->name : 'null',
+                ]);
+                
+                $authorName = 'Unknown Author';
+                if ($book->authorModel) {
+                    $authorName = $book->authorModel->name;
+                } elseif ($book->author_id) {
+                    // Try to get author name directly
+                    $author = \App\Models\author_model::find($book->author_id);
+                    if ($author) {
+                        $authorName = $author->name;
+                    }
+                }
+                
                 return [
                     'id' => $purchase->id,
-                    'book' => $purchase->book,
+                    'book' => [
+                        'id' => $book->id,
+                        'title' => $book->title,
+                        'author' => $authorName,
+                        'authorModel' => $book->authorModel ? [
+                            'id' => $book->authorModel->id,
+                            'name' => $book->authorModel->name,
+                        ] : ($book->author_id ? [
+                            'id' => $book->author_id,
+                            'name' => $authorName,
+                        ] : null),
+                        'description' => $book->description,
+                        'price' => $book->price,
+                        'original_price' => $book->original_price,
+                        'language' => $book->language,
+                        'level' => $book->level,
+                        'image_url' => $book->image_url,
+                        'rating' => $book->rating,
+                        'review_count' => $book->review_count,
+                        'is_active' => $book->is_active,
+                        'preview_url' => $book->preview_url,
+                    ],
                     'purchased_at' => $purchase->purchased_at,
                     'purchase_type' => $purchase->purchase_type,
                     'download_count' => $purchase->download_count ?? 0,
@@ -340,7 +399,11 @@ class BookController extends Controller
                     'remaining_downloads' => $purchase->getRemainingDownloads(),
                     'can_download' => $purchase->canDownload(),
                     'last_downloaded_at' => $purchase->last_downloaded_at,
-                    'payment' => $purchase->payment,
+                    'payment' => $purchase->payment ? [
+                        'id' => $purchase->payment->id,
+                        'amount' => $purchase->payment->amount,
+                        'status' => $purchase->payment->status,
+                    ] : null,
                 ];
             });
 
