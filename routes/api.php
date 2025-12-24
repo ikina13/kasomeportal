@@ -39,7 +39,6 @@ Route::get('users/video/{id}',[CourseController::class,'getVideoByToken']);
 
 // Book Routes (Public)
 Route::get('books',[BookController::class,'index']);
-Route::get('books/{id}',[BookController::class,'show']);
 Route::get('books/{id}/access',[BookController::class,'checkAccess']);
 Route::post('books/payment/callback',[BookPaymentController::class,'paymentCallback']);
 Route::get('books/payment/status/{token}',[BookPaymentController::class,'paymentStatus']);
@@ -79,9 +78,12 @@ Route::group(['middleware'=>['auth:sanctum',TokenMiddleware::class]],function ()
      Route::get('users/courses/{courseId}/access',[SubscriptionController::class,'checkCourseAccess']);
      Route::post('users/subscription/{id}/cancel',[SubscriptionController::class,'cancelSubscription']);
      
-     // Book Routes (Authenticated)
+     // Book Routes (Authenticated) - my-purchases must come before books/{id}
      Route::get('books/my-purchases',[BookController::class,'myPurchases']);
      Route::get('books/{id}/download',[BookController::class,'download']);
      Route::post('books/{id}/purchase',[BookPaymentController::class,'createPaymentToken']);
      Route::post('books/{id}/donate',[BookPaymentController::class,'createPaymentToken']);
 });
+
+// Book Routes (Public) - books/{id} must come after authenticated routes to avoid conflicts
+Route::get('books/{id}',[BookController::class,'show']);

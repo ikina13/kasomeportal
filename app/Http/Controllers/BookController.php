@@ -295,20 +295,21 @@ class BookController extends Controller
     public function myPurchases(Request $request)
     {
         try {
+            // Get user_id from TokenMiddleware (already set in request)
             $userId = $request->input('user_id');
 
             Log::info('BookController: myPurchases called', [
                 'user_id' => $userId,
-                'request_user_id' => $request->input('user_id'),
+                'auth_user' => $request->user() ? $request->user()->id : null,
             ]);
 
             if (!$userId) {
-                Log::warning('BookController: myPurchases - User ID missing');
+                Log::warning('BookController: myPurchases - User ID missing from TokenMiddleware');
                 return response()->json([
                     'status' => 'FAILURE',
-                    'message' => 'User ID is required',
-                    'code' => '400',
-                ], 400);
+                    'message' => 'User ID is required. Please ensure you are authenticated.',
+                    'code' => '401',
+                ], 401);
             }
 
             // Get all purchases for the user with status completed
