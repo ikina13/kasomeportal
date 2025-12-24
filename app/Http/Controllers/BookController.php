@@ -297,7 +297,13 @@ class BookController extends Controller
         try {
             $userId = $request->input('user_id');
 
+            Log::info('BookController: myPurchases called', [
+                'user_id' => $userId,
+                'request_user_id' => $request->input('user_id'),
+            ]);
+
             if (!$userId) {
+                Log::warning('BookController: myPurchases - User ID missing');
                 return response()->json([
                     'status' => 'FAILURE',
                     'message' => 'User ID is required',
@@ -305,11 +311,22 @@ class BookController extends Controller
                 ], 400);
             }
 
+            // Get all purchases for the user with status completed
             $purchases = BookPurchase::where('user_id', $userId)
                 ->where('status', 'completed')
                 ->with(['book.authorModel', 'payment'])
                 ->orderBy('purchased_at', 'desc')
                 ->get();
+
+            Log::info('BookController: myPurchases - Found purchases', [
+                'user_id' => $userId,
+                'count' => $purchases->count(),
+            ]);
+
+            // Filter out purchases where book is missing (soft delete or orphaned)
+            $purchases = $purchases->filter(function($purchase) {
+                return $purchase->book !== null;
+            });
 
             $purchases = $purchases->map(function($purchase) {
                 return [
@@ -317,8 +334,8 @@ class BookController extends Controller
                     'book' => $purchase->book,
                     'purchased_at' => $purchase->purchased_at,
                     'purchase_type' => $purchase->purchase_type,
-                    'download_count' => $purchase->download_count,
-                    'max_downloads' => $purchase->max_downloads,
+                    'download_count' => $purchase->download_count ?? 0,
+                    'max_downloads' => $purchase->max_downloads ?? 0,
                     'remaining_downloads' => $purchase->getRemainingDownloads(),
                     'can_download' => $purchase->canDownload(),
                     'last_downloaded_at' => $purchase->last_downloaded_at,
@@ -326,14 +343,22 @@ class BookController extends Controller
                 ];
             });
 
+            Log::info('BookController: myPurchases - Returning purchases', [
+                'user_id' => $userId,
+                'final_count' => $purchases->count(),
+            ]);
+
             return response()->json([
                 'status' => 'SUCCESS',
                 'message' => 'Purchased books retrieved successfully',
-                'data' => $purchases,
+                'data' => $purchases->values()->all(), // Reset array keys
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('Error fetching user purchases: ' . $e->getMessage());
+            Log::error('Error fetching user purchases: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $request->input('user_id'),
+            ]);
             return response()->json([
                 'status' => 'FAILURE',
                 'message' => 'Failed to retrieve purchased books',
