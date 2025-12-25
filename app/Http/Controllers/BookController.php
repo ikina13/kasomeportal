@@ -48,9 +48,11 @@ class BookController extends Controller
                 }
             }
 
-            // Filter by level
+            // Filter by level (case-insensitive)
             if ($request->has('level') && $request->level !== 'all') {
-                $query->where('level', $request->level);
+                $level = $request->level;
+                // Use case-insensitive matching to handle variations
+                $query->whereRaw('LOWER(level) = ?', [strtolower($level)]);
             }
 
              // Search

@@ -69,9 +69,22 @@ class BookResource extends Resource
                             ->required()
                             ->default('eng'),
 
-                        Forms\Components\TextInput::make('level')
-                            ->maxLength(255)
-                            ->helperText('e.g., Primary, Secondary, Intermediate'),
+                        Forms\Components\Select::make('level')
+                            ->label('Level')
+                            ->options([
+                                'Beginner' => 'Beginner',
+                                'Intermediate' => 'Intermediate',
+                                'Advanced' => 'Advanced',
+                                'Professional' => 'Professional',
+                                'Test Prep' => 'Test Prep',
+                                'Reference' => 'Reference',
+                                'Creative' => 'Creative',
+                                'Primary' => 'Primary',
+                                'Secondary' => 'Secondary',
+                            ])
+                            ->searchable()
+                            ->placeholder('Select a level')
+                            ->helperText('Select the appropriate level for this book'),
 
                         Forms\Components\TextInput::make('price')
                             ->label('Price (TZS)')
