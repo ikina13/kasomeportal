@@ -286,6 +286,8 @@ class CourseController extends Controller
       
         $PaymentAmount =  $request->input('amount');
         $video_id =  $request->input('video_id');
+        $payment_type = $request->input('payment_type', 'purchase'); // 'purchase' or 'subscription'
+        $class_id = $request->input('class_id'); // Required for subscription
         $PaymentCurrency = "TZS";
         $CompanyRef = "49FKEOA";
 
@@ -384,18 +386,30 @@ class CourseController extends Controller
             $TransToken = $xml->xpath('//API3G/TransToken')[0];
             $data = json_decode($token, true);
           
-            $payment = Payments::create([
-                                 'amount'=>  $PaymentAmount,
-                                 'status'=> 'pending',
-                                 'transactiontoken'=> $data['TransToken'],
-                                 'transRef'=>  $data['TransRef'],
-                                 'user_id'=> $userId,
-                                 'video_id'=>$video_id,
-                                 'created_at'=> date('Y-m-d H:i:s'),
-                                 'created_by' => $userId,
-                                 'updated_at'=> date('Y-m-d H:i:s'),
-                                 'updated_by' => $userId
-                                ]);
+            // Build payment data array
+            $paymentData = [
+                'amount'=>  $PaymentAmount,
+                'status'=> 'pending',
+                'transactiontoken'=> $data['TransToken'],
+                'transRef'=>  $data['TransRef'],
+                'user_id'=> $userId,
+                'video_id'=>$video_id,
+                'created_at'=> date('Y-m-d H:i:s'),
+                'created_by' => $userId,
+                'updated_at'=> date('Y-m-d H:i:s'),
+                'updated_by' => $userId
+            ];
+            
+            // Only add payment_type and class_id if columns exist (for subscription support)
+            // These will be retrieved from video if not in payment table
+            if ($payment_type && $payment_type !== 'purchase') {
+                $paymentData['payment_type'] = $payment_type;
+            }
+            if ($class_id) {
+                $paymentData['class_id'] = $class_id;
+            }
+            
+            $payment = Payments::create($paymentData);
             
             return ['status'=> 'SUCCESS','code' => '200','token' =>$data['TransToken'],'message'=>"Token set successfully"];
         }     
