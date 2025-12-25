@@ -23,7 +23,29 @@ class BookController extends Controller
 
             // Filter by language
             if ($request->has('language') && $request->language !== 'all') {
-                $query->where('language', $request->language);
+                $language = strtolower($request->language);
+                // Map common language variations to actual database enum values
+                // Database uses 'eng' and 'swa' as enum values
+                $languageMap = [
+                    'english' => 'eng',
+                    'eng' => 'eng',
+                    'en' => 'eng',
+                    'swahili' => 'swa',
+                    'kiswahili' => 'swa',
+                    'swa' => 'swa',
+                    'sw' => 'swa',
+                ];
+                
+                // Get the database value for the requested language
+                $dbLanguage = $languageMap[$language] ?? null;
+                
+                if ($dbLanguage) {
+                    // Use the actual database enum value
+                    $query->where('language', $dbLanguage);
+                } else {
+                    // Fallback: try exact match (case-insensitive) - might work if it's already a valid enum value
+                    $query->whereRaw('LOWER(language) = ?', [strtolower($request->language)]);
+                }
             }
 
             // Filter by level
@@ -46,7 +68,24 @@ class BookController extends Controller
             // Sort
             $sortBy = $request->input('sort', 'created_at');
             $order = $request->input('order', 'desc');
-            $query->orderBy($sortBy, $order);
+            
+            // Handle special sort options
+            if ($sortBy === 'popular') {
+                // Sort by rating first, then by review_count, then by created_at
+                $query->orderBy('rating', 'desc')
+                      ->orderBy('review_count', 'desc')
+                      ->orderBy('created_at', 'desc');
+            } elseif ($sortBy === 'rating') {
+                $query->orderBy('rating', $order)
+                      ->orderBy('review_count', 'desc');
+            } elseif ($sortBy === 'price-low') {
+                $query->orderBy('price', 'asc');
+            } elseif ($sortBy === 'price-high') {
+                $query->orderBy('price', 'desc');
+            } else {
+                // Default: sort by the specified column
+                $query->orderBy($sortBy, $order);
+            }
 
             // Only show active books for public
             $query->where('is_active', true);
